@@ -37,7 +37,10 @@ async function main(): Promise<number> {
     try {
       const r = restoreBackup(target, { dryRun, force });
       console.log(`备份: ${r.backupDir}`);
-      if (r.selfBackupDir) console.log(`自保备份: ${r.selfBackupDir}`);
+      // M6：根据自保状态输出可辨文本
+      if (r.selfBackupStatus === "created") console.log(`自保备份: ${r.selfBackupDir}`);
+      else if (r.selfBackupStatus === "clean") console.log("自保备份: 无（工作区干净）");
+      else console.log("自保备份: 无（仓库不存在）");
       if (dryRun) {
         // dry-run 预览：不打印"diff.patch 已应用"，只展示将要做什么
         if (r.appliedFiles.length > 0) console.log(`(预览) 将恢复: ${r.appliedFiles.join(", ")}`);
@@ -62,4 +65,9 @@ async function main(): Promise<number> {
   return usage();
 }
 
-main().then((code) => process.exit(code));
+main()
+  .then((code) => process.exit(code))
+  .catch((e) => {
+    process.stderr.write(`git-safety-guard 内部错误: ${e}\n`);
+    process.exit(1);
+  });

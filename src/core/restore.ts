@@ -5,6 +5,8 @@ import type { Manifest } from "../types.js";
 import { execGit, inRepo } from "./git.js";
 import { createBackup } from "./backup.js";
 
+export type SelfBackupStatus = "created" | "clean" | "repo-missing";
+
 export interface RestoreResult {
   backupDir: string;
   applied: boolean;
@@ -14,6 +16,7 @@ export interface RestoreResult {
   appliedStashes: string[];
   skippedStashes: string[];
   selfBackupDir: string | null;
+  selfBackupStatus: SelfBackupStatus;
 }
 
 /** 从 diff.patch 中解析受影响的路径名（"diff --git a/<p> b/<p>" 头去重） */
@@ -71,14 +74,38 @@ export function restoreBackup(
 
   // 1. 自保备份（恢复动作本身也可能是丢弃；dry-run 也会做，落在 BACKUP_ROOT）
   let selfBackupDir: string | null = null;
+  let selfBackupStatus: SelfBackupStatus;
   const cur = inRepo(manifest.repoRoot);
-  if (cur) {
+  if (!cur) {
+    selfBackupStatus = "repo-missing";
+  } else {
     const self = createBackup(manifest.repoRoot, {
       triggerCommand: `git-safety-guard restore ${basename(dir)} (self-backup)`,
       agent: "unknown",
       backupRoot: opts.backupRoot,
     });
-    selfBackupDir = self?.dir ?? null;
+    if (self) {
+      selfBackupDir = self.dir;
+      selfBackupStatus = "created";
+    } else {
+      selfBackupStatus = "clean";
+    }
+  }
+
+  // repo 不存在时后续步骤都无法执行（git 二进制无 cwd、cpSync 无目标）；
+  // 提前返回，让用户从备份目录手工拷走产物。
+  if (selfBackupStatus === "repo-missing") {
+    return {
+      backupDir: dir,
+      applied: false,
+      appliedFiles: [],
+      restoredUntracked: [],
+      skippedExisting: [],
+      appliedStashes: [],
+      skippedStashes: [],
+      selfBackupDir: null,
+      selfBackupStatus,
+    };
   }
 
   // 2. diff.patch 应用：先 --check 再 apply，失败整体中止（spec 7.4）
@@ -91,7 +118,10 @@ export function restoreBackup(
     try {
       execGit(["apply", "--check", patchPath], manifest.repoRoot);
     } catch (e) {
-      throw new Error(`git apply --check 失败（已中止，未做任何修改；自保备份: ${selfBackupDir ?? "无"}）: ${e}`);
+      const reason = selfBackupStatus === "created" ? selfBackupDir
+        : selfBackupStatus === "clean" ? "（工作区干净，无需自保）"
+        : "（仓库不存在，无法自保）";
+      throw new Error(`git apply --check 失败（已中止，未做任何修改；自保备份: ${reason}）: ${e}`);
     }
     if (!opts.dryRun) {
       execGit(["apply", patchPath], manifest.repoRoot);
@@ -154,5 +184,6 @@ export function restoreBackup(
     appliedStashes,
     skippedStashes,
     selfBackupDir,
+    selfBackupStatus,
   };
 }

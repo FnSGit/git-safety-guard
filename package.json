@@ -10,7 +10,8 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "bun test",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
   },
   "pi": { "extensions": ["./src/pi"] },
   "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },

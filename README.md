@@ -57,15 +57,17 @@ pi install npm:git-safety-guard
 
 | 命令 | 说明 |
 |---|---|
-| `git checkout <path>` / `git checkout HEAD -- <path>` / `git checkout -- <path>` / `git checkout <sha> -- <path>` / `git checkout .` | 还原路径 |
+| `git checkout <path>` / `git checkout HEAD -- <path>` / `git checkout -- <path>` / `git checkout <sha> -- <path>` / `git checkout <ref> <path>` / `git checkout .` | 还原路径（含带 `--` 与不带 `--` 两种形式） |
 | `git checkout <branch-or-sha>` / `git checkout -f <branch-or-sha>` | 切分支（含 force） |
 | `git restore <path>` / `git restore .` | 丢弃 working tree |
 | `git switch -f` / `git switch --discard-changes` | 强制切换 |
 | `git reset --hard [<commit>]` | 硬重置 |
-| `git clean -f` / `git clean -fd` / `git clean -fdx` | 删除未跟踪文件 |
+| `git clean -f` / `git clean -fd` / `git clean -fdx` / `git clean --force` / `git clean --force -d` | 删除未跟踪文件（短选项 `-f*` 与长选项 `--force`） |
 | `git stash drop [stash@{N}]` / `git stash clear` | 破坏 stash |
 
 **复合命令**按 `&&` / `||` / `;` / 换行切段后匹配（`cd /tmp && git reset --hard` 会命中）。
+
+**cd 前缀解析**：命中段之前的 `cd <dir>` 决定备份目录（取最后一个 `cd` 段）；`cd -`、裸 `cd`、解析失败 → 回退会话 cwd；命中段之后的 `cd` 被忽略（已晚）。这保证 `cd <other-repo> && git reset --hard` 备份落点正确。
 
 **显式排除**：`git restore --staged`、`git checkout -b`、`git stash pop` / `apply` / `branch`、`git reset`（软/mixed）、`git branch -D`（不在 v0.1 范围）。
 
@@ -115,12 +117,15 @@ git-safety-guard restore latest --force   # untracked 回填时覆盖已存在�
                        #  stashRefs, stashList, versions}
 ```
 
-`untracked` 超过 500 个文件时只备份清单不复制内容，`manifest.untrackedTruncated: true`。备份目录无自动清理——`list` 暴露数量，可手动 `rm -rf` 旧条目。
+`untracked` 超过 500 个文件时只备份清单不复制内容，`manifest.untrackedTruncated: true`；提示文本同步追加“未备份实体内容”说明以避免表面安全。备份目录无自动清理——`list` 暴露数量，可手动 `rm -rf` 旧条目。
 
 ## 局限
 
 - **fail-open**：备份失败 / 解析失败 / 任何异常一律放行原命令并 exit 0。本工具是备份器不是闸门，阻断失败后果比备份失败更重。如果你需要硬阻断，请搭配 dcg 等阻断型工具。
 - **不做 shell 解析**：引号内文本可能误报（如 `echo "git reset --hard"`）。误报成本仅为多做一次空备份，可接受。如需严格语义，请改造 `src/core/detect.ts` 的分段逻辑。
+- **detect 变体覆盖边界**（v0.1）：
+  - **覆盖**：short options `-f`/`-fd`/`-fdx`（clean）、long `--force`（clean）、带 `--` 的 checkout 路径、不带 `--` 的 checkout `<ref> <path>`、reset `--hard`、switch `-f`/`--discard-changes`、复合命令分段、cd 前缀解析
+  - **未覆盖**（v0.2 候选）：选项顺序变体如 `git reset -q --hard`、long `--force` 的 `git switch --force <branch>`、`git clean` 之外的 flag 组合、未在表格的 `--force`-style long options
 - **恢复不重建 stash 栈**：`stash/` 下的 patch 以 `git apply` 还原到工作树，不会恢复 `git stash list` 中的条目。如需重建栈，属 v0.2 范围。
 - **并行 pi worker 污染**：默认关闭 worker 检测；开启后会话启动时 `ctx.ui.notify` 提示同 cwd 的 `pi --mode rpc` 进程，但需你自行确认 worker 已停止（ps 扫描依赖 BSD `ps` 字段格式，Linux 下需自行验证）。
 - **覆盖范围仅 git 丢弃类**：本工具不管 `rm -rf`、非 git 命令、shell 注入等更广泛的风险面。

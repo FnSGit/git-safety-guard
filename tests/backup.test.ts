@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTempRepo, writeIn } from "./helpers.js";
 import { createBackup, buildNote } from "../src/core/backup.js";
+import { resolveCwdForCommand } from "../src/core/detect.js";
 
 let root: string;
 beforeEach(() => {
@@ -69,13 +70,29 @@ describe("createBackup", () => {
     expect(readdirSync(join(r.dir, "stash")).sort()).toEqual(["stash-0.patch", "stash-1.patch"]);
   });
 
-  test("超 500 untracked 只列清单不复制", () => {
+  test("超 500 untracked 只列清单不复制 + note 诚实提示", () => {
     const repo = makeTempRepo();
     for (let i = 0; i < 501; i++) writeIn(repo, `f${i}.txt`, "x");
     const r = createBackup(repo, { triggerCommand: "git clean -fd", agent: "pi", backupRoot: root })!;
     expect(r.manifest.untrackedTruncated).toBe(true);
     expect(r.manifest.untrackedFiles).toHaveLength(501);
     expect(existsSync(join(r.dir, "untracked"))).toBe(false);
+    // M4：note 必须明示未备份实体内容
+    expect(r.note).toContain("untracked");
+    expect(r.note).toMatch(/超\s*500|截断|未备份实体/);
+  });
+
+  test("cd 前缀解析：备份落在 cd 到的仓库（不是 sessionCwd）", () => {
+    // sessionCwd 在 repo1，触发命令将破坏动作切到 repo2
+    const repo1 = makeTempRepo();
+    const repo2 = makeTempRepo();
+    writeIn(repo2, "a.txt", "will-be-discarded\n");
+    const cmd = `cd "${repo2}" && git reset --hard`;
+    const resolvedCwd = resolveCwdForCommand(cmd, repo1);
+    expect(resolvedCwd).toBe(repo2);
+    const r = createBackup(resolvedCwd, { triggerCommand: cmd, agent: "pi", backupRoot: root })!;
+    expect(r.manifest.repoRoot).toBe(repo2);
+    expect(readFileSync(join(r.dir, "diff.patch"), "utf8")).toContain("will-be-discarded");
   });
 });
 
@@ -87,6 +104,11 @@ describe("buildNote", () => {
   });
   test("无备份", () => {
     expect(buildNote(null)).toContain("无可备份改动");
+  });
+  test("M4 超限时追加提示", () => {
+    const note = buildNote("/backups/2026", { truncated: true });
+    expect(note).toContain("/backups/2026");
+    expect(note).toMatch(/超\s*500|截断|未备份实体/);
   });
 });
 

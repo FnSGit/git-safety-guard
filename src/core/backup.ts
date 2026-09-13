@@ -29,9 +29,12 @@ function uniqueDir(root: string): string {
   return dir;
 }
 
-export function buildNote(dir: string | null): string {
+export function buildNote(dir: string | null, opts?: { truncated?: boolean }): string {
   if (!dir) return "[git-guard] 检测到丢弃型 git 命令，但当前无可备份改动（工作区干净）。";
-  return `[git-guard] ⚠️ 该命令会丢弃未提交改动。已自动备份到 ${dir}（恢复：git-safety-guard restore latest）`;
+  const suffix = opts?.truncated
+    ? "（untracked 文件超 500，仅记录清单，未备份实体内容）"
+    : "";
+  return `[git-guard] ⚠️ 该命令会丢弃未提交改动。已自动备份到 ${dir}（恢复：git-safety-guard restore latest）${suffix}`;
 }
 
 export function createBackup(
@@ -100,7 +103,7 @@ export function createBackup(
   };
   writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-  return { dir, manifest, note: buildNote(dir) };
+  return { dir, manifest, note: buildNote(dir, { truncated }) };
 }
 
 function gitVersion(): string {

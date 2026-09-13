@@ -149,13 +149,17 @@ git-safety-guard/
 | 命令 | 说明 |
 |---|---|
 | `git checkout HEAD -- <path>` / `git checkout -- <path>` / `git checkout <sha> -- <path>` | 还原路径 |
+| `git checkout <ref> <path>`（不带 `--`） | 还原路径（v0.1 新增：e.g. `git checkout main src/`） |
 | `git checkout <branch-or-sha>`（不带 `-b`） | 切分支（冲突时可能要求清理；留底无妨） |
 | `git checkout -f <branch-or-sha>` / `git checkout .` / `git checkout -- .` | 强制切换 / worktree 全量丢弃 |
 | `git restore <path>` / `git restore .`（不带 `--staged`） | 丢弃 working tree |
 | `git switch --discard-changes [...]` / `git switch -f [...]` | 强制切换，丢弃本地改动 |
 | `git reset --hard [<commit>]` | 硬重置 |
-| `git clean -f[d|x]` | 删除未跟踪文件（untracked 的直接杀手） |
+| `git clean -f[d|x]` / `git clean --force` / `git clean --force -d` | 删除未跟踪文件（v0.1 新增 `--force`） |
 | `git stash drop [stash@{N}]` / `git stash clear` | 破坏 stash（v0.1 新增，见 7.2） |
+
+未覆盖（v0.2 候选）：选项顺序变体如 `git reset -q --hard`、`git switch --force <branch>`、
+未在表格的 `--force`-style long options。
 
 不识别为丢弃型（放行且不备份）：`git restore --staged`、`git reset`（软/mixed）、
 `git checkout -b`、`git stash pop`/`stash apply`、`git stash branch`
@@ -163,6 +167,13 @@ git-safety-guard/
 
 **返回值**：`detectCommand` 返回 `DetectResult`（见 7.8），命中时携带
 `subcommand` 与命中段文本，供提示文案与 manifest 使用；未命中返回 `{ matched: false }`。
+
+**cd 前缀解析（v0.1 新增）**：丢弃动作实际发生的目录由**命中段之前**的
+最后一个 `cd <dir>` 段决定。实现位于 `resolveCwdForCommand(cmd, sessionCwd)`
+（与 `detectCommand` 复用 `splitSegments`）。支持引号包裹与 `~/x`；`cd -` /
+裸 `cd` / 解析失败 → 回退 `sessionCwd`；命中段之后的 `cd` 忽略（已晚）。
+pi 与 CLI 入口均在调用 `createBackup` 之前先经此函数解析 cwd。这一规则保证
+`cd <other-repo> && git reset --hard` 的备份落点正确，避免虚假安全感。
 
 ### 7.4 恢复命令
 
@@ -188,7 +199,8 @@ pi.on("tool_call", async (event) => {
   if (event.toolName !== "bash") return;
   const cmd = event.input.command ?? "";
   if (!isDiscardCommand(cmd)) return;
-  const result = createBackup(ctx.cwd, { triggerCommand: cmd, agent: "pi" });
+  const cwd = resolveCwdForCommand(cmd, ctx.cwd);   // cd 前缀解析（spec 7.3）
+  const result = createBackup(cwd, { triggerCommand: cmd, agent: "pi" });
   // 结果缓存到 toolCallId → 在 tool_result 事件 append 提示
 });
 pi.on("tool_result", async (event) => {
@@ -225,6 +237,9 @@ exit code 语义：0 = 放行（本工具**永远 0**，除非 restore 子命令
                （模型可见 reason；裸 stderr 只进 transcript，不回灌模型）
   Codex：exit 0 + 最小 hookSpecificOutput JSON（参照 dcg 的 Codex 适配经验）
 ```
+
+CLI 入口同样先用 `resolveCwdForCommand`（spec 7.3）从 payload.cwd 解析
+真实破坏目录，再调用 `createBackup`。
 
 - 识别来源：payload 字段形状 + 环境变量（Claude `hook_event_name` / Codex `turn_id`）
 - 未知来源：fallback 输出空 stdout + stderr 提示 + exit 0（放行，不阻断）

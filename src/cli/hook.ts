@@ -1,4 +1,4 @@
-import { detectCommand } from "../core/detect.js";
+import { detectCommand, resolveCwdForCommand } from "../core/detect.js";
 import { createBackup, buildNote } from "../core/backup.js";
 import type { Manifest } from "../types.js";
 
@@ -42,7 +42,8 @@ export async function runHook(): Promise<number> {
     if (!result.matched) return 0;
 
     const agent = detectAgent(payload);
-    const cwd = typeof payload.cwd === "string" ? payload.cwd : process.cwd();
+    const sessionCwd = typeof payload.cwd === "string" ? payload.cwd : process.cwd();
+    const cwd = resolveCwdForCommand(cmd, sessionCwd);
     const backup = createBackup(cwd, { triggerCommand: cmd, agent });
     const note = buildNote(backup?.dir ?? null);
 

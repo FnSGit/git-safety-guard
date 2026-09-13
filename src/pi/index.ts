@@ -1,6 +1,6 @@
 //! git-safety-guard pi 扩展：tool_call 前备份，tool_result 后挂提示
 import { execFileSync } from "node:child_process";
-import { detectCommand } from "../core/detect.js";
+import { detectCommand, resolveCwdForCommand } from "../core/detect.js";
 import { createBackup, buildNote } from "../core/backup.js";
 
 /** 并行 worker 检测（默认关，GIT_SAFETY_GUARD_WORKER_DETECT=1 开启） */
@@ -31,11 +31,13 @@ export default function gitSafetyGuard(pi: {
     const cmd: string = event.input?.command ?? "";
     if (!detectCommand(cmd).matched) return;
     try {
-      const cwd = ctx?.cwd ?? process.cwd();
+      const sessionCwd = ctx?.cwd ?? process.cwd();
+      const cwd = resolveCwdForCommand(cmd, sessionCwd);
       const backup = createBackup(cwd, { triggerCommand: cmd, agent: "pi" });
       pending.set(event.toolCallId, backup?.note ?? buildNote(null));
-    } catch {
-      // fail-open：备份失败不阻断
+    } catch (e) {
+      // M5：fail-open 留痕（不阻断，不改工具输入）
+      process.stderr.write(`[git-guard] 备份失败（已放行）: ${e}\n`);
     }
   });
 

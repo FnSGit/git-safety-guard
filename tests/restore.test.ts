@@ -35,6 +35,7 @@ describe("restoreBackup", () => {
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toContain("modified");
     expect(readFileSync(join(repo, "untracked.txt"), "utf8")).toBe("precious\n");
     expect(res.selfBackupDir).not.toBeNull();
+    expect(res.selfBackupStatus).toBe("created"); // b.txt 脏，self-backup 创建
   });
 
   test("--dry-run 不动文件", () => {
@@ -43,6 +44,9 @@ describe("restoreBackup", () => {
     const res = restoreBackup("latest", { dryRun: true, backupRoot: root });
     expect(res.applied).toBe(false);
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("hello\n");
+    // M6：dry-run + 无额外脏文件 → 自保状态为 clean
+    expect(res.selfBackupStatus).toBe("clean");
+    expect(res.selfBackupDir).toBeNull();
   });
 
   test("--dry-run 不写 untracked 文件但列出预览", () => {
@@ -85,6 +89,18 @@ describe("restoreBackup", () => {
     expect(res.appliedStashes).toEqual([]);
     // diff.patch 为空（原始无 diff），restore 不应抛错
     expect(res.applied).toBe(false);
+  });
+
+  test("M6 repo-missing：仓库不存在时自保状态明确", () => {
+    const repo = makeTempRepo();
+    writeIn(repo, "a.txt", "modified\n");
+    const b = createBackup(repo, { triggerCommand: "git reset --hard", agent: "pi", backupRoot: root })!;
+    // 模拟仓库被删：把 repoRoot 目录 rm 掉，restore 仍走自保分支但 repo 不存在
+    rmSync(repo, { recursive: true, force: true });
+    const res = restoreBackup("latest", { backupRoot: root });
+    expect(res.selfBackupStatus).toBe("repo-missing");
+    expect(res.selfBackupDir).toBeNull();
+    expect(b.dir).toBeTruthy(); // 仅断言原备份可被列出解析
   });
 
   test("不覆盖已存在文件，--force 覆盖", () => {
