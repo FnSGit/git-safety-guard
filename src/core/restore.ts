@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, existsSync, mkdirSync, cpSync } from "node:f
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import type { Manifest } from "../types.js";
-import { execGit, inRepo, listUntracked } from "./git.js";
+import { execGit, inRepo } from "./git.js";
 import { createBackup } from "./backup.js";
 
 export interface RestoreResult {
@@ -11,6 +11,8 @@ export interface RestoreResult {
   appliedFiles: string[];
   restoredUntracked: string[];
   skippedExisting: string[];
+  appliedStashes: string[];
+  skippedStashes: string[];
   selfBackupDir: string | null;
 }
 
@@ -20,7 +22,7 @@ function parseAppliedFiles(patch: string): string[] {
   const re = /^diff --git a\/(.+?) b\/(.+?)$/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(patch)) !== null) {
-    // rename/rename 或 mode 变更时 a/b 不同；记录两者取较短的规范路径，取 b 为准（apply 后状态）
+    // rename/rename 或 mode 变更时 a/b 不同；记录 b 为准（apply 后状态）
     seen.add(m[2]);
   }
   return [...seen];
@@ -67,7 +69,7 @@ export function restoreBackup(
   const dir = resolveDir(root, target);
   const manifest: Manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
 
-  // 1. 自保备份（恢复动作本身也可能是丢弃）
+  // 1. 自保备份（恢复动作本身也可能是丢弃；dry-run 也会做，落在 BACKUP_ROOT）
   let selfBackupDir: string | null = null;
   const cur = inRepo(manifest.repoRoot);
   if (cur) {
@@ -79,7 +81,7 @@ export function restoreBackup(
     selfBackupDir = self?.dir ?? null;
   }
 
-  // 2. patch 应用：先 --check 再 apply，失败整体中止
+  // 2. diff.patch 应用：先 --check 再 apply，失败整体中止（spec 7.4）
   const patchPath = join(dir, "diff.patch");
   let applied = false;
   let appliedFiles: string[] = [];
@@ -97,7 +99,29 @@ export function restoreBackup(
     }
   }
 
-  // 3. untracked 复制回（不覆盖已存在，除非 --force）
+  // 3. stash patch 应用（spec 7.2）：逐个 --check，失败跳过而非中止
+  const appliedStashes: string[] = [];
+  const skippedStashes: string[] = [];
+  const stashDir = join(dir, "stash");
+  if (existsSync(stashDir)) {
+    for (const name of readdirSync(stashDir).filter((f) => f.endsWith(".patch")).sort()) {
+      const p = join(stashDir, name);
+      try {
+        execGit(["apply", "--check", p], manifest.repoRoot);
+      } catch {
+        skippedStashes.push(name);
+        continue;
+      }
+      if (opts.dryRun) {
+        appliedStashes.push(name); // 预览：check 通过即视为将要应用
+      } else {
+        execGit(["apply", p], manifest.repoRoot);
+        appliedStashes.push(name);
+      }
+    }
+  }
+
+  // 4. untracked 复制回（不覆盖已存在，除非 --force；dry-run 不动文件但仍预览）
   const restoredUntracked: string[] = [];
   const skippedExisting: string[] = [];
   const uDir = join(dir, "untracked");
@@ -110,11 +134,25 @@ export function restoreBackup(
         skippedExisting.push(rel);
         continue;
       }
+      if (opts.dryRun) {
+        // 预览：列入将要恢复的列表，但不动磁盘
+        restoredUntracked.push(rel);
+        continue;
+      }
       mkdirSync(dest.slice(0, dest.lastIndexOf("/")), { recursive: true });
       cpSync(src, dest);
       restoredUntracked.push(rel);
     }
   }
 
-  return { backupDir: dir, applied, appliedFiles, restoredUntracked, skippedExisting, selfBackupDir };
+  return {
+    backupDir: dir,
+    applied,
+    appliedFiles,
+    restoredUntracked,
+    skippedExisting,
+    appliedStashes,
+    skippedStashes,
+    selfBackupDir,
+  };
 }

@@ -38,10 +38,18 @@ async function main(): Promise<number> {
       const r = restoreBackup(target, { dryRun, force });
       console.log(`备份: ${r.backupDir}`);
       if (r.selfBackupDir) console.log(`自保备份: ${r.selfBackupDir}`);
-      if (dryRun) console.log("(dry-run) 未做任何修改");
-      else {
+      if (dryRun) {
+        // dry-run 预览：不打印"diff.patch 已应用"，只展示将要做什么
+        if (r.appliedFiles.length > 0) console.log(`(预览) 将恢复: ${r.appliedFiles.join(", ")}`);
+        if (r.appliedStashes.length > 0) console.log(`(预览) 将应用 stash patch: ${r.appliedStashes.join(", ")}`);
+        if (r.skippedStashes.length > 0) console.log(`(预览) 将跳过 stash patch（冲突）: ${r.skippedStashes.join(", ")}`);
+        if (r.restoredUntracked.length > 0) console.log(`(预览) 将恢复 untracked ${r.restoredUntracked.length} 个`);
+        if (r.skippedExisting.length > 0) console.log(`(预览) untracked 跳过已存在 ${r.skippedExisting.length} 个（--force 可覆盖）`);
+      } else {
         if (r.applied) console.log("diff.patch 已应用");
         if (r.appliedFiles.length > 0) console.log(`已恢复: ${r.appliedFiles.join(", ")}`);
+        if (r.appliedStashes.length > 0) console.log(`stash patch 已应用: ${r.appliedStashes.join(", ")}`);
+        if (r.skippedStashes.length > 0) console.log(`stash patch 跳过（冲突）: ${r.skippedStashes.join(", ")}`);
         console.log(`untracked 恢复 ${r.restoredUntracked.length} 个${r.skippedExisting.length ? `，跳过已存在 ${r.skippedExisting.length} 个（--force 可覆盖）` : ""}`);
       }
       return 0;

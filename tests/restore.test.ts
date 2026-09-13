@@ -45,6 +45,48 @@ describe("restoreBackup", () => {
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("hello\n");
   });
 
+  test("--dry-run 不写 untracked 文件但列出预览", () => {
+    const { repo } = backupRepoWithChanges();
+    simulateDiscard(repo); // untracked.txt 被删
+    const res = restoreBackup("latest", { dryRun: true, backupRoot: root });
+    expect(existsSync(join(repo, "untracked.txt"))).toBe(false); // 确实没写
+    expect(res.restoredUntracked).toContain("untracked.txt"); // 预览里有
+  });
+
+  test("stash patch 应用：stash 丢丢 → restore 回填到工作树", () => {
+    const repo = makeTempRepo();
+    // 先造一个有未提交改动的仓库，然后 stash
+    writeFileSync(join(repo, "a.txt"), "stashed-content\n");
+    execFileSync("git", ["stash", "push", "-q", "-m", "wip-a"], { cwd: repo });
+    // 备份（针对 stash drop 触发）
+    const b = createBackup(repo, { triggerCommand: "git stash drop", agent: "pi", backupRoot: root })!;
+    expect(existsSync(join(b.dir, "stash", "stash-0.patch"))).toBe(true);
+    // stash drop 仅删除栈条目，不动工作树——此时 a.txt 仍是 HEAD 内容
+    execFileSync("git", ["stash", "drop"], { cwd: repo });
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("hello\n");
+    // 恢复：stash patch 被 apply，a.txt 变回 stashed-content
+    const res = restoreBackup("latest", { backupRoot: root });
+    expect(res.appliedStashes).toContain("stash-0.patch");
+    expect(res.skippedStashes).toEqual([]);
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("stashed-content\n");
+  });
+
+  test("stash patch 冲突时跳过而非中止", () => {
+    const repo = makeTempRepo();
+    writeFileSync(join(repo, "a.txt"), "stashed-content\n");
+    execFileSync("git", ["stash", "push", "-q", "-m", "wip-collision"], { cwd: repo });
+    const b = createBackup(repo, { triggerCommand: "git stash drop", agent: "pi", backupRoot: root })!;
+    execFileSync("git", ["stash", "drop"], { cwd: repo });
+    // 制造冲突：把仓库 a.txt 改成不同内容并提交（使 stash patch 不可应用）
+    writeFileSync(join(repo, "a.txt"), "totally-different-base\n");
+    execCommitAll(repo);
+    const res = restoreBackup("latest", { backupRoot: root });
+    expect(res.skippedStashes).toContain("stash-0.patch");
+    expect(res.appliedStashes).toEqual([]);
+    // diff.patch 为空（原始无 diff），restore 不应抛错
+    expect(res.applied).toBe(false);
+  });
+
   test("不覆盖已存在文件，--force 覆盖", () => {
     const { repo } = backupRepoWithChanges();
     simulateDiscard(repo);

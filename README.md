@@ -27,8 +27,7 @@ pi install npm:git-safety-guard
         "hooks": [
           {
             "type": "command",
-            "command": "git-safety-guard hook",
-            "statusMessage": "git-safety-guard: checking"
+            "command": "git-safety-guard hook"
           }
         ]
       }
@@ -80,12 +79,15 @@ git-safety-guard restore latest --dry-run
 git-safety-guard restore latest --force   # untracked 回填时覆盖已存在文件
 ```
 
-**恢复语义**（任何失败整体中止，不部分修改）：
+**恢复语义**（diff.patch 任何失败整体中止，不部分修改；stash/untracked 跳过而非中止）：
 
-1. 对当前状态再做一次自保备份（恢复动作本身也可能丢弃改动）
+1. 对当前状态再做一次自保备份（恢复动作本身也可能丢弃改动；即使 `--dry-run` 也会生成，落在 `BACKUP_ROOT`，不触碰仓库）
 2. `git apply --check` 校验 `diff.patch`，失败则中止并报告自保目录
-3. `git apply` 应用 patch
-4. 把 `untracked/` 下文件复制回仓库相对路径；**已存在的同名文件默认跳过**，`--force` 才覆盖
+3. `git apply` 应用 diff.patch
+4. 对 `stash/` 下每个 stash patch 依次 `--check`：`git apply` 回填到工作树（不重建 `git stash list`）；冲突的 patch 跳过并在摘要中报告
+5. 把 `untracked/` 下文件复制回仓库相对路径；**已存在的同名文件默认跳过**，`--force` 才覆盖
+
+**`--dry-run`**：完全不动仓库文件（diff.patch / untracked / stash 全部不写）；仍会做一次自保备份（守卫自身保护）；输出预览"将恢复 / 将应用 / 将跳过"。
 
 恢复不重建 stash 栈——`stash/` 下的 patch 以 `git apply` 回填到工作树。
 
