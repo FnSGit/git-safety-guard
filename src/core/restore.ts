@@ -8,9 +8,22 @@ import { createBackup } from "./backup.js";
 export interface RestoreResult {
   backupDir: string;
   applied: boolean;
+  appliedFiles: string[];
   restoredUntracked: string[];
   skippedExisting: string[];
   selfBackupDir: string | null;
+}
+
+/** 从 diff.patch 中解析受影响的路径名（"diff --git a/<p> b/<p>" 头去重） */
+function parseAppliedFiles(patch: string): string[] {
+  const seen = new Set<string>();
+  const re = /^diff --git a\/(.+?) b\/(.+?)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(patch)) !== null) {
+    // rename/rename 或 mode 变更时 a/b 不同；记录两者取较短的规范路径，取 b 为准（apply 后状态）
+    seen.add(m[2]);
+  }
+  return [...seen];
 }
 
 function defaultRoot(): string {
@@ -69,7 +82,10 @@ export function restoreBackup(
   // 2. patch 应用：先 --check 再 apply，失败整体中止
   const patchPath = join(dir, "diff.patch");
   let applied = false;
+  let appliedFiles: string[] = [];
   if (existsSync(patchPath)) {
+    const patchText = readFileSync(patchPath, "utf8");
+    appliedFiles = parseAppliedFiles(patchText);
     try {
       execGit(["apply", "--check", patchPath], manifest.repoRoot);
     } catch (e) {
@@ -100,5 +116,5 @@ export function restoreBackup(
     }
   }
 
-  return { backupDir: dir, applied, restoredUntracked, skippedExisting, selfBackupDir };
+  return { backupDir: dir, applied, appliedFiles, restoredUntracked, skippedExisting, selfBackupDir };
 }
