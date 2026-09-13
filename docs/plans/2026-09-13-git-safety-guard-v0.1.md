@@ -729,12 +729,17 @@ function backupRepoWithChanges(): { repo: string; dir: string } {
   return { repo, dir: r.dir };
 }
 
+/** 模拟丢弃已发生：a.txt 回到 HEAD 内容，untracked 被 clean 掉 */
+function simulateDiscard(repo: string) {
+  writeFileSync(join(repo, "a.txt"), "hello\n"); // HEAD 内容
+  rmSync(join(repo, "untracked.txt"));
+}
+
 describe("restoreBackup", () => {
   test("round-trip：备份 → 破坏 → latest 恢复", () => {
     const { repo, dir } = backupRepoWithChanges();
-    writeFileSync(join(repo, "a.txt"), "destroyed\n");
-    // 模拟命令已执行：untracked.txt 被 clean 掉
-    execRm(join(repo, "untracked.txt"));
+    simulateDiscard(repo);
+    writeIn(repo, "b.txt", "dirty during restore\n"); // 无关脏文件，触发自保备份
 
     const res = restoreBackup("latest", { backupRoot: root });
     expect(res.backupDir).toBe(dir);
@@ -746,15 +751,15 @@ describe("restoreBackup", () => {
 
   test("--dry-run 不动文件", () => {
     const { repo } = backupRepoWithChanges();
-    writeFileSync(join(repo, "a.txt"), "destroyed\n");
+    simulateDiscard(repo);
     const res = restoreBackup("latest", { dryRun: true, backupRoot: root });
     expect(res.applied).toBe(false);
-    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("destroyed\n");
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("hello\n");
   });
 
   test("不覆盖已存在文件，--force 覆盖", () => {
     const { repo } = backupRepoWithChanges();
-    writeFileSync(join(repo, "a.txt"), "destroyed\n");
+    simulateDiscard(repo);
     writeIn(repo, "untracked.txt", "newer\n");
     restoreBackup("latest", { backupRoot: root });
     expect(readFileSync(join(repo, "untracked.txt"), "utf8")).toBe("newer\n");
@@ -780,8 +785,8 @@ describe("listBackups", () => {
   });
 });
 
-import { execFileSync, rmSync } from "node:child_process";
-function execRm(p: string) { rmSync(p); }
+import { execFileSync } from "node:child_process";
+import { rmSync } from "node:fs";
 function execCommitAll(repo: string) {
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["commit", "-q", "-m", "x"], { cwd: repo });
@@ -989,7 +994,7 @@ describe("restore 子命令", () => {
     const repo = makeTempRepo();
     writeIn(repo, "a.txt", "modified\n");
     const b = createBackup(repo, { triggerCommand: "git reset --hard", agent: "claude", backupRoot: process.env.GIT_SAFETY_GUARD_BACKUP_ROOT = mkdtempSync(join(tmpdir(), "gsg-cli-")) })!;
-    writeFileSync(join(repo, "a.txt"), "destroyed\n");
+    writeFileSync(join(repo, "a.txt"), "hello\n"); // 模拟丢弃已发生（HEAD 内容）
     const proc = Bun.spawnSync(
       ["bun", "run", new URL("../src/cli/main.ts", import.meta.url).pathname, "restore", "latest"],
       { cwd: repo, env: { ...process.env, GIT_SAFETY_GUARD_BACKUP_ROOT: b.dir.split("/").slice(0, -1).join("/") } },
