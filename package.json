@@ -1,0 +1,23 @@
+{
+  "name": "git-safety-guard",
+  "version": "0.1.0",
+  "description": "Backup-then-allow guard for discarding git commands. Auto-backs up diff + untracked + stash before checkout/restore/reset --hard/clean/stash drop, then lets the command run. pi extension + PreToolUse hook CLI.",
+  "type": "module",
+  "main": "./src/pi/index.ts",
+  "bin": { "git-safety-guard": "./dist/cli/main.js" },
+  "files": ["src", "dist", "README.md", "LICENSE"],
+  "keywords": ["pi-package", "git", "safety", "backup", "hook", "agent"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "bun test",
+    "build": "tsc -p tsconfig.json"
+  },
+  "pi": { "extensions": ["./src/pi"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^20.0.0",
+    "bun-types": "^1.1.0",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
