@@ -675,6 +675,7 @@ function gitVersion(): string {
     return "unknown";
   }
 }
+```
 
 - [ ] **Step 4: 运行确认通过，提交**
 
