@@ -1,7 +1,7 @@
-# git-safety-guard 设计文档（v0.1）
+# git-safety-guard 设计文档（v0.2）
 
 - 日期：2026-09-13
-- 状态：待评审
+- 状态：待评审（v0.2：补全 detect 规格 / stash 范围 / types / hook 契约）
 - 作者：fengshuai（AI 辅助起草）
 
 ## 1. 背景与动机
@@ -90,7 +90,7 @@ git-safety-guard/
 ├─ tsconfig.json
 ├─ src/
 │  ├─ core/
-│  │  ├─ detect.ts     # isDiscardCommand(cmd): boolean（纯函数）
+│  │  ├─ detect.ts     # detectCommand(cmd): DetectResult（纯函数，分段匹配）
 │  │  ├─ backup.ts     # createBackup(cwd, opts): BackupResult | null
 │  │  ├─ restore.ts    # restoreBackup(backupDir | "latest", opts)
 │  │  └─ git.ts        # inRepo / getDiff / listUntracked / execGit
@@ -121,34 +121,48 @@ git-safety-guard/
 ~/.git-safety-guard/backups/          # 默认 backupRoot，可配置
 └─ 2026-09-13T20-30-00-000Z/
    ├─ diff.patch          # git diff + git diff --staged 拼接（含 header 注释）
+   ├─ stash/              # 仅 stash 破坏类命令触发：每个 stash 一个 patch
+   │  └─ stash-0.patch    # git stash show -p --include-untracked stash@{N}
    ├─ untracked/          # git ls-files --others --exclude-standard 逐个复制
    │  └─ <仓库相对路径原样>
-   └─ manifest.json       # { timestamp, cwd, repoRoot, triggerCommand,
-                          #   agent, diffStat, untrackedFiles[], versions }
+   └─ manifest.json
 ```
+
+- **stash 备份语义**：`git stash drop [stash@{N}]` 备份目标 stash（缺省 N=0）；
+  `git stash clear` 备份全部 stash（遍历 `git stash list`）。manifest 记录备份前
+  的完整 `stash list`（含 message），恢复时 `git apply stash-N.patch` 还原到
+  工作树（不重建 stash 栈——重建属 v0.2 范围）。`git stash pop` 成功即已应用、
+  失败不丢 stash，两态均无损失，**不识别**。
 
 - **不再写 `/tmp`**（重启清空风险）；默认 root `~/.git-safety-guard/backups/`
 - `backupRoot` 可通过环境变量 `GIT_SAFETY_GUARD_BACKUP_ROOT` 覆盖（pi 与 CLI 共用）
 - 同秒多次触发：时间戳加 `-ms` 后缀去重，不覆盖已有目录
-- 空 diff 且无 untracked → 不生成备份目录（返回 null），提示"无可备份改动"
+- 空 diff 且无 untracked 且无 stash → 不生成备份目录（返回 null），提示"无可备份改动"
 
 ### 7.3 丢弃命令识别（detect.ts）
 
-在现有正则基础上补充变体，识别以下为丢弃型：
+**分段规则（正式）**：先按 `&&` / `\|\|` / `;` / 换行把整条命令切分为段，
+逐段匹配下表。这保证 `cd x && git reset --hard` 命中、而 `echo "git reset --hard"`
+中引号内的文本因不构成独立段中的 git 子命令形态而误报率可控（仍可能误报，
+接受——备份无副作用，误报成本低；不做 shell 解析，KISS）。
 
 | 命令 | 说明 |
 |---|---|
 | `git checkout HEAD -- <path>` / `git checkout -- <path>` / `git checkout <sha> -- <path>` | 还原路径 |
 | `git checkout <branch-or-sha>`（不带 `-b`） | 切分支（冲突时可能要求清理；留底无妨） |
-| `git checkout .` / `git checkout -- .` | worktree 全量丢弃 |
+| `git checkout -f <branch-or-sha>` / `git checkout .` / `git checkout -- .` | 强制切换 / worktree 全量丢弃 |
 | `git restore <path>` / `git restore .`（不带 `--staged`） | 丢弃 working tree |
+| `git switch --discard-changes [...]` / `git switch -f [...]` | 强制切换，丢弃本地改动 |
 | `git reset --hard [<commit>]` | 硬重置 |
 | `git clean -f[d|x]` | 删除未跟踪文件（untracked 的直接杀手） |
+| `git stash drop [stash@{N}]` / `git stash clear` | 破坏 stash（v0.1 新增，见 7.2） |
 
 不识别为丢弃型（放行且不备份）：`git restore --staged`、`git reset`（软/mixed）、
-`git stash`、`git branch -D`（v0.1 范围外，见非目标）。
+`git checkout -b`、`git stash pop`/`stash apply`、`git stash branch`
+（内容已落地分支）、`git branch -D`（v0.1 范围外，见非目标）。
 
-- `--staged` 的 restore、`-b` 的 checkout 显式排除，避免误报。
+**返回值**：`detectCommand` 返回 `DetectResult`（见 7.8），命中时携带
+`subcommand` 与命中段文本，供提示文案与 manifest 使用；未命中返回 `{ matched: false }`。
 
 ### 7.4 恢复命令
 
@@ -182,14 +196,27 @@ pi.on("tool_result", async (event) => {
 });
 ```
 
-- 不再 `; echo` 拼接污染原命令，改走 `tool_result` append。
+- 不再 `; echo` 拼接污染原命令，改走 `tool_result` 返回 content patch。
+- 提示注入形状（已对照 pi 文档 extensions.md#tool_result）：`tool_result`
+  处理器返回**部分 patch**，本工具 append 一个 text block：
+  `return { content: [...event.content, { type: "text", text: note }] }`；
+  `toolCallId` ↔ 备份目录的映射存入内存 Map（会话级即可，无需持久化）。
 - 并行 pi RPC worker 检测：**默认关**（`GIT_SAFETY_GUARD_WORKER_DETECT=1` 开启），
   逻辑保留在 pi 入口内（core 不管这个）。
 
 **CLI 入口（`src/cli/hook.ts`）**
 
+Claude Code PreToolUse stdin payload（工具需消费的字段）：
+
+```json
+{ "session_id": "...", "hook_event_name": "PreToolUse",
+  "tool_name": "Bash", "tool_input": { "command": "git reset --hard" },
+  "cwd": "/path/to/repo" }
 ```
-stdin  = PreToolUse JSON payload（Claude/Codex 形状）
+
+exit code 语义：0 = 放行（本工具**永远 0**，除非 restore 子命令自身出错）；
+2 = 阻断（阻断型工具专用，本工具不用）。
+
 输出契约按来源适配：
   Claude Code：输出 JSON
                {"hookSpecificOutput":{"hookEventName":"PreToolUse",
@@ -235,7 +262,42 @@ hook 配置示例（README 提供）：
 - **默认关**：`GIT_SAFETY_GUARD_WORKER_DETECT=1` 才启用
 - 仅 pi 入口实现；CLI 入口无此特性（不感知 pi）
 
-### 7.8 配置汇总
+### 7.8 类型定义（types.ts）
+
+```ts
+export interface DetectResult {
+  matched: boolean;
+  subcommand?: "checkout" | "restore" | "switch" | "reset" | "clean" | "stash";
+  segment?: string;        // 命中的命令段（复合命令切分后）
+}
+
+export interface Manifest {
+  version: 1;                          // manifest schema 版本
+  timestamp: string;                   // ISO 8601
+  cwd: string; repoRoot: string;
+  triggerCommand: string;
+  agent: "pi" | "claude" | "codex" | "unknown";
+  diffStat: string | null;             // git diff --stat 摘要
+  untrackedFiles: string[];            // 仓库相对路径
+  untrackedTruncated: boolean;         // 超 500 文件只列清单不复制
+  stashRefs: string[];                 // 备份的 stash 引用，如 ["stash@{0}"]
+  stashList: string | null;            // 备份前 git stash list 原文
+  versions: { guard: string; node: string; git: string };
+}
+
+export interface BackupResult {
+  dir: string;            // 备份目录绝对路径
+  manifest: Manifest;
+  note: string;           // 给 agent 看的提示文案
+}
+
+export interface Options {
+  backupRoot?: string;    // 默认 ~/.git-safety-guard/backups/（env 可覆盖）
+  quiet?: boolean;        // GIT_SAFETY_GUARD_QUIET=1：备份照做，不出提示
+}
+```
+
+### 7.9 配置汇总
 
 | 配置 | 默认 | 覆盖方式 |
 |---|---|---|
@@ -258,8 +320,8 @@ hook 配置示例（README 提供）：
 
 | 用例组 | 覆盖 |
 |---|---|
-| detect.test.ts | 每种丢弃变体命中、每种安全变体不命中（含 `--staged`/`-b` 排除） |
-| backup.test.ts | 有改动生成完整产物；空改动返回 null；untracked 递归复制含子目录；同秒去重；backupRoot 可配置 |
+| detect.test.ts | 每种丢弃变体命中（含 switch/-f/stash drop/clear）；每种安全变体不命中（含 `--staged`/`-b`/`stash pop` 排除）；**复合命令分段**（`cd x && git reset --hard` 命中、`echo "git reset --hard"` 不误伤即接受现状记录行为）；多段中仅一段命中 |
+| backup.test.ts | 有改动生成完整产物；空改动返回 null；untracked 递归复制含子目录；同秒去重；backupRoot 可配置；**stash drop 生成 stash-0.patch 且 manifest.stashList 非空**；stash clear 备份全部 |
 | restore.test.ts | 备份→破坏→恢复 round-trip（含 untracked 文件）；--dry-run 不动文件；恢复前自保备份 |
 | cli.test.ts | hook stdin 解析 / 输出契约（Claude 形状）；未知 payload fail-open |
 
@@ -278,6 +340,6 @@ hook 配置示例（README 提供）：
 |---|---|
 | untracked 大文件/海量文件拖慢备份 | manifest 记录数量；超阈值（>500 文件）只备份清单不复制内容，manifest 标注 `truncated: true` |
 | `git apply` 冲突致恢复失败 | 恢复失败不部分应用；提示手动处理；自保备份兜底 |
-| hook 识别误报（如 `git commit -m "..."` 含敏感词） | 正则锚定子命令位置，不做全文匹配；测试含负例 |
+| hook 识别误报（如 `echo "git reset --hard"` 引号内文本） | 分段匹配降低误报；残余误报接受（备份无副作用）；测试记录行为基线 |
 | 备份目录无限增长 | v0.1 不做自动清理；`list` 暴露数量，README 提示手动清理；v0.2 考虑 `prune` |
 | pi 扩展 jiti 加载兼容性 | 本地 `pi -e` 实测 |
