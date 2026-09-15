@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { resolve, join } from "node:path";
 import type { DetectResult } from "../types.js";
 
 interface Pattern {
@@ -87,6 +88,9 @@ function parseCdTarget(seg: string, baseCwd: string): string | null {
     dir = sp < 0 ? rest : rest.slice(0, sp);
   }
   if (dir === "" || dir === "-") return null;
+  // 波浪号展开：~ → homedir，~/x → homedir/x；其他形式（含 ~user/x）不展开
+  if (dir === "~") dir = homedir();
+  else if (dir.startsWith("~/")) dir = join(homedir(), dir.slice(2));
   let resolved: string;
   try {
     resolved = resolve(baseCwd, dir);

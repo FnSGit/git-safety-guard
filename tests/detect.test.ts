@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { resolve, join } from "node:path";
 import { detectCommand, resolveCwdForCommand, splitSegments } from "../src/core/detect.js";
 
 const hits: Array<[string, string]> = [
@@ -101,6 +102,16 @@ describe("resolveCwdForCommand", () => {
   });
   test("cd - 忽略 → 回退 sessionCwd", () => {
     expect(resolveCwdForCommand("cd - && git reset --hard", "/session")).toBe("/session");
+  });
+  test("cd ~/work 展开波浪号（目标不存在 → 回退 resolve 结果）", () => {
+    expect(resolveCwdForCommand("cd ~/work && git reset --hard", "/tmp/whatever")).toBe(join(homedir(), "work"));
+  });
+  test("cd ~ 展开为 homedir", () => {
+    expect(resolveCwdForCommand("cd ~ && git reset --hard", "/tmp/whatever")).toBe(join(homedir()));
+  });
+  test("cd ~user/x 不展开 → 按相对路径回退 resolve 结果", () => {
+    const session = "/tmp/whatever";
+    expect(resolveCwdForCommand("cd ~someone/x && git reset --hard", session)).toBe(resolve(session, "~someone/x"));
   });
   test("cd 在命中段之后 → 忽略（已晚）", () => {
     expect(resolveCwdForCommand("git reset --hard && cd /tmp", "/session")).toBe("/session");
