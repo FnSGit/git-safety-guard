@@ -175,6 +175,11 @@ git-safety-guard/
 pi 与 CLI 入口均在调用 `createBackup` 之前先经此函数解析 cwd。这一规则保证
 `cd <other-repo> && git reset --hard` 的备份落点正确，避免虚假安全感。
 
+**波浪号边界（v0.1）**：仅展开 `~`（家目录）与 `~/...`（家目录相对）；
+**不展开 `~user/...`**（需解析 `/etc/passwd`，超出 v0.1 范围）。`~user/x`
+形式会退化为未命中仓库的默认行为（见上：回退 `sessionCwd` 或 `createBackup`
+返回 null → 提示“无可备份改动”）。该边界记入 v0.2 待办考虑是否扩展。
+
 ### 7.4 恢复命令
 
 ```
