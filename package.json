@@ -4,7 +4,7 @@
   "description": "Backup-then-allow guard for discarding git commands. Auto-backs up diff + untracked + stash before checkout/restore/reset --hard/clean/stash drop, then lets the command run. pi extension + PreToolUse hook CLI.",
   "type": "module",
   "main": "./src/pi/index.ts",
-  "bin": { "git-safety-guard": "./dist/cli/main.js" },
+  "bin": { "git-safety-guard": "dist/cli/main.js" },
   "files": ["src", "dist", "README.md", "LICENSE"],
   "keywords": ["pi-package", "git", "safety", "backup", "hook", "agent"],
   "engines": { "node": ">=20" },
