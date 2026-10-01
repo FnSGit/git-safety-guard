@@ -14,6 +14,15 @@ pi install npm:git-safety-guard
 
 包内 `package.json` 通过 `pi.extensions` 自动声明，启用后立即生效，无需额外配置。
 
+> npm 未解封前的过渡安装（等效，从 GitHub 源拉取）：
+> ```bash
+> pi install git:github.com/FnSGit/git-safety-guard@v0.1.0
+> ```
+> 或从 [Releases](https://github.com/FnSGit/git-safety-guard/releases) 下载 tarball：
+> ```bash
+> pi install https://github.com/FnSGit/git-safety-guard/releases/download/v0.1.0/git-safety-guard-0.1.0.tgz
+> ```
+
 ### 2. Claude Code（PreToolUse hook）
 
 在 `~/.claude/settings.json`（项目级则 `.claude/settings.json`）的 `hooks.PreToolUse` 加入：
